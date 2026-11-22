@@ -11,7 +11,12 @@ let pool = null;
 let sqlite = null;
 if (usePostgres) {
   const { Pool } = require('pg');
-  pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10, ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: true } });
+  const dbUrl = process.env.DATABASE_URL || '';
+  const isInternal = !dbUrl.includes('.') || dbUrl.includes('.internal');
+  const sslConfig = (process.env.PGSSLMODE === 'disable' || isInternal)
+    ? false
+    : { rejectUnauthorized: false };
+  pool = new Pool({ connectionString: dbUrl, max: 10, ssl: sslConfig });
 } else {
   sqlite = new DatabaseSync(path.join(__dirname, 'database.sqlite'));
 }
