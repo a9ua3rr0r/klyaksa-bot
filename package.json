@@ -1,0 +1,15 @@
+{
+  "name": "klyaksa-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "klyaksa PRO Telegram bot and licensing server",
+  "main": "bot.js",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "check": "node --check db.js && node --check bot.js && node --check server.js && node --check generate_key.js && node --check migrate-sqlite-to-postgres.js",
+    "start": "node bot.js",
+    "migrate": "node migrate-sqlite-to-postgres.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": { "pg": "^8.13.1" }
+}

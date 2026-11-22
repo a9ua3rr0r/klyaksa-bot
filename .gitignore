@@ -1,0 +1,7 @@
+/config.json
+/database.sqlite*
+*.log
+.env
+.env.*
+node_modules/
+/backups/

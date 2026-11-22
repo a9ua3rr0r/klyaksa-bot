@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: klyaksa-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node bot.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: https://klyaksabyaqua.netlify.app
+      - key: DATABASE_URL
+        sync: false
+      - key: KLYAKSA_BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        sync: false
