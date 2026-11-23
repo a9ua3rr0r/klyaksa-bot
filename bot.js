@@ -328,6 +328,9 @@ async function getAdminDashboardMessage() {
     `• Доступно свободных ключей: <b>${stats.availableLicenses}</b>\n` +
     `• Заказов: <b>${stats.totalOrders}</b> (Оплачено: <b>${stats.paidOrders}</b>)\n` +
     `• Выручка: <b>${stats.revenueRub}</b> ₽ | <b>${stats.revenueStars}</b> ⭐️\n\n` +
+    `🛠 <b>Команды управления ключами:</b>\n` +
+    `• <code>/revoke &lt;КЛЮЧ&gt;</code> — заблокировать ключ навсегда\n` +
+    `• <code>/reset &lt;КЛЮЧ&gt;</code> — сбросить привязку HWID (перенос на другой ПК)\n\n` +
     `Выберите действие ниже:`;
 }
 
@@ -719,6 +722,40 @@ async function handleMessage(msg) {
       await sendMessage(chatId, `✅ <b>Ответ успешно доставлен пользователю!</b> (ID: <code>${targetUserId}</code>)`);
     } catch (err) {
       await sendMessage(chatId, `❌ Ошибка отправки ответа пользователю <code>${targetUserId}</code>: ${err.message}`);
+    }
+    return;
+  }
+
+  // Команда админа /revoke <KEY> - аннулирование / блокировка ключа
+  if (isAdmin(userId) && text.startsWith('/revoke')) {
+    const match = text.match(/^\/revoke\s+(\S+)$/i);
+    if (!match) {
+      await sendMessage(chatId, '⚠️ <b>Формат команды:</b> <code>/revoke &lt;КЛЮЧ&gt;</code>\nПример: <code>/revoke KLYA-PRO-ABCD-EFGH</code>\n\nБлокирует ключ навсегда.');
+      return;
+    }
+    const keyToRevoke = match[1].trim();
+    const res = await db.revokeLicense(keyToRevoke);
+    if (res.success) {
+      await sendMessage(chatId, `🚫 <b>Ключ аннулирован!</b>\nКлюч <code>${escapeHtml(keyToRevoke)}</code> заблокирован администратором. Активация на устройствах больше невозможна.`);
+    } else {
+      await sendMessage(chatId, `❌ Ошибка: ${escapeHtml(res.error)}`);
+    }
+    return;
+  }
+
+  // Команда админа /reset <KEY> - сброс привязки HWID ключа (отвязать от устройства)
+  if (isAdmin(userId) && text.startsWith('/reset')) {
+    const match = text.match(/^\/reset\s+(\S+)$/i);
+    if (!match) {
+      await sendMessage(chatId, '⚠️ <b>Формат команды:</b> <code>/reset &lt;КЛЮЧ&gt;</code>\nПример: <code>/reset KLYA-PRO-ABCD-EFGH</code>\n\nСбрасывает привязку к HWID, позволяя активировать ключ на другом ПК.');
+      return;
+    }
+    const keyToReset = match[1].trim();
+    const res = await db.resetLicenseHwid(keyToReset);
+    if (res.success) {
+      await sendMessage(chatId, `🔄 <b>Привязка сброшена!</b>\nКлюч <code>${escapeHtml(keyToReset)}</code> отвязан от устройства и снова доступен для повторной активации.`);
+    } else {
+      await sendMessage(chatId, `❌ Ошибка: ${escapeHtml(res.error)}`);
     }
     return;
   }

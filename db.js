@@ -132,6 +132,40 @@ async function getPendingOrders() { return query('SELECT * FROM orders WHERE sta
 async function completeOrder(id, key) { return (await query('UPDATE orders SET status=$1,license_key=$2,updated_at=$3 WHERE id=$4', ['paid', key, new Date().toISOString(), id]))[0]; }
 async function declineOrder(id) { return (await query('UPDATE orders SET status=$1,updated_at=$2 WHERE id=$3 AND status=$4', ['declined', new Date().toISOString(), id, 'pending']))[0]; }
 
+async function deactivateLicense(rawKey, hwid) {
+  if (!rawKey || typeof rawKey !== 'string') return { success: false, error: 'Ключ не указан' };
+  const lic = (await query('SELECT * FROM licenses WHERE UPPER(key)=UPPER($1)', [rawKey.trim()]))[0];
+  if (!lic) return { success: false, error: 'Лицензионный ключ не найден.' };
+  if (lic.status === 'revoked') return { success: false, error: 'Ключ аннулирован администратором.' };
+  if (lic.status !== 'activated') return { success: true, message: 'Ключ не был привязан к устройству.' };
+
+  const cleanHwid = String(hwid || '').trim().toUpperCase();
+  const currentHwid = String(lic.activated_hwid || '').trim().toUpperCase();
+
+  if (cleanHwid && currentHwid && cleanHwid !== currentHwid) {
+    return { success: false, error: 'HWID устройства не совпадает с привязанным.' };
+  }
+
+  await query('UPDATE licenses SET status=$1, activated_hwid=NULL, activated_at=NULL WHERE UPPER(key)=UPPER($2)', ['available', rawKey.trim()]);
+  return { success: true, message: 'Лицензия успешно отвязана от устройства и возвращена в статус свободной.' };
+}
+
+async function revokeLicense(rawKey) {
+  if (!rawKey || typeof rawKey !== 'string') return { success: false, error: 'Ключ не указан' };
+  const lic = (await query('SELECT * FROM licenses WHERE UPPER(key)=UPPER($1)', [rawKey.trim()]))[0];
+  if (!lic) return { success: false, error: 'Лицензионный ключ не найден.' };
+  await query('UPDATE licenses SET status=$1 WHERE UPPER(key)=UPPER($2)', ['revoked', rawKey.trim()]);
+  return { success: true, message: `Ключ ${lic.key} успешно аннулирован (заблокирован).`, license: lic };
+}
+
+async function resetLicenseHwid(rawKey) {
+  if (!rawKey || typeof rawKey !== 'string') return { success: false, error: 'Ключ не указан' };
+  const lic = (await query('SELECT * FROM licenses WHERE UPPER(key)=UPPER($1)', [rawKey.trim()]))[0];
+  if (!lic) return { success: false, error: 'Лицензионный ключ не найден.' };
+  await query('UPDATE licenses SET status=$1, activated_hwid=NULL, activated_at=NULL WHERE UPPER(key)=UPPER($2)', ['available', rawKey.trim()]);
+  return { success: true, message: `Привязка HWID для ключа ${lic.key} сброшена. Ключ снова готов к активации.`, license: lic };
+}
+
 async function insertLicense(createdBy, client = null) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const key = generateKeyString();
@@ -223,4 +257,4 @@ async function approveOrder(id) {
   } catch (err) { sqlite.exec('ROLLBACK'); throw err; }
 }
 
-module.exports = { db: usePostgres ? pool : sqlite, ready, usingPostgres: usePostgres, generateKeyString, verifyKeyChecksum, createLicense, createBatchLicenses, getLicense, claimLicense, activateLicense, getAvailableKeys, getUserLicenses, getStats, createOrder, getOrder, getPendingOrders, completeOrder, declineOrder, fulfillStarsPayment, approveOrder };
+module.exports = { db: usePostgres ? pool : sqlite, ready, usingPostgres: usePostgres, generateKeyString, verifyKeyChecksum, createLicense, createBatchLicenses, getLicense, claimLicense, activateLicense, deactivateLicense, revokeLicense, resetLicenseHwid, getAvailableKeys, getUserLicenses, getStats, createOrder, getOrder, getPendingOrders, completeOrder, declineOrder, fulfillStarsPayment, approveOrder };

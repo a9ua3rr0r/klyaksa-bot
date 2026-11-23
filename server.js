@@ -288,6 +288,27 @@ function startServer(onActivationNotification = null) {
         }
       }
 
+      // 2b. Деактивация / отвязка ключа klyaksa PRO от устройства
+      if (req.method === 'POST' && pathname === '/api/deactivate') {
+        const rate = rateLimiters.activate(`${getClientAddress(req)}:deactivate`);
+        if (!rate.allowed) {
+          res.setHeader('Retry-After', rate.retryAfterSeconds);
+          return sendJson(res, 429, { success: false, error: 'Слишком много запросов. Повторите позже.' });
+        }
+        const body = await readJsonBody(req, bodyLimits.activate);
+        const { key, hwid } = body;
+
+        if (!key || !hwid) {
+          return sendJson(res, 400, {
+            success: false,
+            error: 'Поля key и hwid обязательны для деактивации.'
+          });
+        }
+
+        const result = await db.deactivateLicense(key, hwid);
+        return sendJson(res, 200, result);
+      }
+
       // 3. Быстрая проверка валидности ключа без смены статуса
       if (req.method === 'POST' && pathname === '/api/verify') {
         const rate = rateLimiters.verify(`${getClientAddress(req)}:verify`);
