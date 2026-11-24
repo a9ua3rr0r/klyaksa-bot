@@ -329,7 +329,7 @@ function startServer(onActivationNotification = null) {
         }
 
         if (lic.status === 'revoked') {
-          return sendJson(res, 200, { success: false, error: 'Лицензионный ключ аннулирован.' });
+          return sendJson(res, 200, { success: false, status: 'revoked', error: 'Лицензионный ключ аннулирован.' });
         }
 
         if (lic.status === 'activated') {
