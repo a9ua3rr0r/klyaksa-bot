@@ -173,13 +173,18 @@ function startServer(onActivationNotification = null) {
   const rateLimiters = {
     activate: createRateLimiter({ limit: 10, windowMs: 60 * 1000 }),
     verify: createRateLimiter({ limit: 60, windowMs: 60 * 1000 }),
-    supportTicket: createRateLimiter({ limit: 5, windowMs: 10 * 60 * 1000 })
+    supportTicket: createRateLimiter({ limit: 5, windowMs: 10 * 60 * 1000 }),
+    adminAction: createRateLimiter({ limit: 30, windowMs: 60 * 1000 })
   };
   const bodyLimits = {
     activate: 64 * 1024,
     verify: 64 * 1024,
-    supportTicket: 10 * 1024 * 1024
+    supportTicket: 10 * 1024 * 1024,
+    adminAction: 64 * 1024
   };
+  const normalizeKeyArg = raw => (typeof raw === 'string'
+    ? raw.trim().replace(/^[<`"'[]+|[>`"'\]]+$/g, '').toUpperCase()
+    : '');
 
   const server = http.createServer(async (req, res) => {
     const requestOrigin = getRequestOrigin(req);
@@ -233,8 +238,111 @@ function startServer(onActivationNotification = null) {
             key: l.key,
             tier: l.tier,
             status: l.status,
+            activated_hwid: l.activated_hwid || null,
             activated_at: l.activated_at
           }))
+        });
+      }
+
+      // 1.2. Самостоятельная отвязка своего ключа пользователем в Mini App
+      if (req.method === 'POST' && pathname === '/api/user-reset-key') {
+        const rate = rateLimiters.adminAction(`${getClientAddress(req)}:user-reset-key`);
+        if (!rate.allowed) {
+          res.setHeader('Retry-After', rate.retryAfterSeconds);
+          return sendJson(res, 429, { success: false, error: 'Слишком много запросов. Повторите позже.' });
+        }
+        const telegramUser = getTelegramAuth(req, config);
+        if (!telegramUser || !telegramUser.id) {
+          return sendJson(res, 401, { success: false, error: 'Требуется авторизация Telegram Web App.' });
+        }
+        const body = await readJsonBody(req, bodyLimits.adminAction);
+        const cleanKey = normalizeKeyArg(body.key);
+        if (!cleanKey) {
+          return sendJson(res, 400, { success: false, error: 'Поле key обязательно.' });
+        }
+        const lic = await db.getLicense(cleanKey);
+        if (!lic) {
+          return sendJson(res, 404, { success: false, error: 'Лицензионный ключ не найден.' });
+        }
+        const isOwnerUser = config.admin_id && Number(telegramUser.id) === Number(config.admin_id);
+        if (Number(lic.claimed_by) !== Number(telegramUser.id) && !isOwnerUser) {
+          return sendJson(res, 403, { success: false, error: 'Этот ключ не привязан к вашему Telegram-аккаунту.' });
+        }
+        if (lic.status === 'revoked') {
+          return sendJson(res, 200, { success: false, error: 'Ключ аннулирован администратором.' });
+        }
+        const result = await db.resetLicenseHwid(lic.key);
+        return sendJson(res, 200, result.success
+          ? { success: true, status: 'available', message: 'Ключ отвязан от ПК и готов к активации на новом устройстве.' }
+          : result);
+      }
+
+      // 1.3. Админская отвязка ключа в Mini App (/reset)
+      if (req.method === 'POST' && pathname === '/api/admin/reset-key') {
+        const rate = rateLimiters.adminAction(`${getClientAddress(req)}:admin-reset-key`);
+        if (!rate.allowed) {
+          res.setHeader('Retry-After', rate.retryAfterSeconds);
+          return sendJson(res, 429, { success: false, error: 'Слишком много запросов. Повторите позже.' });
+        }
+        const telegramUser = getTelegramAuth(req, config);
+        if (!telegramUser || !telegramUser.id) {
+          return sendJson(res, 401, { success: false, error: 'Требуется авторизация Telegram Web App.' });
+        }
+        if (!config.admin_id || Number(telegramUser.id) !== Number(config.admin_id)) {
+          return sendJson(res, 403, { success: false, error: 'Недостаточно прав (только для владельца).' });
+        }
+        const body = await readJsonBody(req, bodyLimits.adminAction);
+        const cleanKey = normalizeKeyArg(body.key);
+        if (!cleanKey) {
+          return sendJson(res, 400, { success: false, error: 'Укажите ключ.' });
+        }
+        const result = await db.resetLicenseHwid(cleanKey);
+        return sendJson(res, 200, result);
+      }
+
+      // 1.4. Админская блокировка ключа в Mini App (/revoke)
+      if (req.method === 'POST' && pathname === '/api/admin/revoke-key') {
+        const rate = rateLimiters.adminAction(`${getClientAddress(req)}:admin-revoke-key`);
+        if (!rate.allowed) {
+          res.setHeader('Retry-After', rate.retryAfterSeconds);
+          return sendJson(res, 429, { success: false, error: 'Слишком много запросов. Повторите позже.' });
+        }
+        const telegramUser = getTelegramAuth(req, config);
+        if (!telegramUser || !telegramUser.id) {
+          return sendJson(res, 401, { success: false, error: 'Требуется авторизация Telegram Web App.' });
+        }
+        if (!config.admin_id || Number(telegramUser.id) !== Number(config.admin_id)) {
+          return sendJson(res, 403, { success: false, error: 'Недостаточно прав (только для владельца).' });
+        }
+        const body = await readJsonBody(req, bodyLimits.adminAction);
+        const cleanKey = normalizeKeyArg(body.key);
+        if (!cleanKey) {
+          return sendJson(res, 400, { success: false, error: 'Укажите ключ.' });
+        }
+        const result = await db.revokeLicense(cleanKey);
+        return sendJson(res, 200, result);
+      }
+
+      // 1.5. Генерация реального ключа админом из Mini App
+      if (req.method === 'POST' && pathname === '/api/admin/create-key') {
+        const rate = rateLimiters.adminAction(`${getClientAddress(req)}:admin-create-key`);
+        if (!rate.allowed) {
+          res.setHeader('Retry-After', rate.retryAfterSeconds);
+          return sendJson(res, 429, { success: false, error: 'Слишком много запросов. Повторите позже.' });
+        }
+        const telegramUser = getTelegramAuth(req, config);
+        if (!telegramUser || !telegramUser.id) {
+          return sendJson(res, 401, { success: false, error: 'Требуется авторизация Telegram Web App.' });
+        }
+        if (!config.admin_id || Number(telegramUser.id) !== Number(config.admin_id)) {
+          return sendJson(res, 403, { success: false, error: 'Недостаточно прав (только для владельца).' });
+        }
+        const lic = await db.createLicense('mini_app_admin', 'ProLifetime');
+        return sendJson(res, 200, {
+          success: true,
+          key: lic.key,
+          tier: lic.tier,
+          status: lic.status
         });
       }
 

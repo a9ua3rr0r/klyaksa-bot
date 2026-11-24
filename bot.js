@@ -465,16 +465,28 @@ async function handleMessage(msg) {
     return;
   }
 
-  // Если сообщение выглядит как лицензионный ключ формата KLYA-PRO-XXXX-XXXX
-  const keyMatch = text.match(/KLYA[-_]PRO[-_][A-Z0-9]{4}[-_][A-Z0-9]{4}/i);
+  // Если сообщение выглядит как лицензионный ключ формата KLYA-PRO-XXXX-XXXX (и это не /команда)
+  const keyMatch = !text.startsWith('/') ? text.match(/KLYA[-_]PRO[-_][A-Z0-9]{4}[-_][A-Z0-9]{4}/i) : null;
   if (keyMatch) {
     const rawFoundKey = keyMatch[0].toUpperCase().replace(/_/g, '-');
     const licInfo = await db.getLicense(rawFoundKey);
     const statusText = licInfo
-      ? (licInfo.status === 'activated'
-          ? `✅ <b>Лицензия активна</b> (Привязана к HWID: <code>${licInfo.activated_hwid || 'ПК'}</code>)`
-          : `🟢 <b>Ключ действителен и готов к активации!</b>`)
+      ? (licInfo.status === 'revoked'
+          ? `🚫 <b>Ключ аннулирован администратором.</b>`
+          : licInfo.status === 'activated'
+            ? `✅ <b>Лицензия активна</b> (Привязана к HWID: <code>${escapeHtml(licInfo.activated_hwid || 'ПК')}</code>)`
+            : `🟢 <b>Ключ действителен и готов к активации!</b>`)
       : `ℹ️ <b>Формат ключа распознан.</b>`;
+
+    const inlineRows = [];
+    if (isAdmin(userId) && licInfo) {
+      inlineRows.push([
+        { text: '🔄 Отвязать ПК (/reset)', callback_data: `admin_reset_key:${rawFoundKey}` },
+        { text: '🚫 Заблокировать (/revoke)', callback_data: `admin_revoke_key:${rawFoundKey}` }
+      ]);
+    }
+    inlineRows.push([{ text: '🔑 Мои ключи', callback_data: 'my_keys' }]);
+    inlineRows.push([{ text: '⬅️ В главное меню', callback_data: 'main_menu' }]);
 
     await sendMessage(chatId,
       `🔑 <b>Лицензионный ключ klyaksa PRO:</b>\n<code>${rawFoundKey}</code>\n\n` +
@@ -486,10 +498,7 @@ async function handleMessage(msg) {
       `4. Вставьте ключ и нажмите кнопку <b>«Активировать»</b>.`,
       {
         reply_markup: {
-          inline_keyboard: [
-            [{ text: '🔑 Мои ключи', callback_data: 'my_keys' }],
-            [{ text: '⬅️ В главное меню', callback_data: 'main_menu' }]
-          ]
+          inline_keyboard: inlineRows
         }
       }
     );
@@ -727,13 +736,13 @@ async function handleMessage(msg) {
   }
 
   // Команда админа /revoke <KEY> - аннулирование / блокировка ключа
-  if (isAdmin(userId) && text.startsWith('/revoke')) {
-    const match = text.match(/^\/revoke\s+(\S+)$/i);
+  if (isAdmin(userId) && /^\/revoke(?:@\S+)?(?:\s|$)/i.test(text)) {
+    const match = text.match(/^\/revoke(?:@\S+)?\s+(\S+)$/i);
     if (!match) {
-      await sendMessage(chatId, '⚠️ <b>Формат команды:</b> <code>/revoke &lt;КЛЮЧ&gt;</code>\nПример: <code>/revoke KLYA-PRO-ABCD-EFGH</code>\n\nБлокирует ключ навсегда.');
+      await sendMessage(chatId, '⚠️ <b>Формат команды:</b> <code>/revoke КЛЮЧ</code>\nПример: <code>/revoke KLYA-PRO-ABCD-EFGH</code>\n\nБлокирует ключ навсегда.');
       return;
     }
-    const keyToRevoke = match[1].trim();
+    const keyToRevoke = match[1].trim().replace(/^[<`"'[]+|[>`"'\]]+$/g, '').toUpperCase();
     const res = await db.revokeLicense(keyToRevoke);
     if (res.success) {
       await sendMessage(chatId, `🚫 <b>Ключ аннулирован!</b>\nКлюч <code>${escapeHtml(keyToRevoke)}</code> заблокирован администратором. Активация на устройствах больше невозможна.`);
@@ -744,13 +753,13 @@ async function handleMessage(msg) {
   }
 
   // Команда админа /reset <KEY> - сброс привязки HWID ключа (отвязать от устройства)
-  if (isAdmin(userId) && text.startsWith('/reset')) {
-    const match = text.match(/^\/reset\s+(\S+)$/i);
+  if (isAdmin(userId) && /^\/reset(?:@\S+)?(?:\s|$)/i.test(text)) {
+    const match = text.match(/^\/reset(?:@\S+)?\s+(\S+)$/i);
     if (!match) {
-      await sendMessage(chatId, '⚠️ <b>Формат команды:</b> <code>/reset &lt;КЛЮЧ&gt;</code>\nПример: <code>/reset KLYA-PRO-ABCD-EFGH</code>\n\nСбрасывает привязку к HWID, позволяя активировать ключ на другом ПК.');
+      await sendMessage(chatId, '⚠️ <b>Формат команды:</b> <code>/reset КЛЮЧ</code>\nПример: <code>/reset KLYA-PRO-ABCD-EFGH</code>\n\nСбрасывает привязку к HWID, позволяя активировать ключ на другом ПК.');
       return;
     }
-    const keyToReset = match[1].trim();
+    const keyToReset = match[1].trim().replace(/^[<`"'[]+|[>`"'\]]+$/g, '').toUpperCase();
     const res = await db.resetLicenseHwid(keyToReset);
     if (res.success) {
       await sendMessage(chatId, `🔄 <b>Привязка сброшена!</b>\nКлюч <code>${escapeHtml(keyToReset)}</code> отвязан от устройства и снова доступен для повторной активации.`);
@@ -1105,6 +1114,32 @@ async function handleCallbackQuery(cb) {
 
   if (!isAdmin(userId)) {
     await answerCallbackQuery(cb.id, '⛔ Нет доступа', true);
+    return;
+  }
+
+  if (data.startsWith('admin_reset_key:')) {
+    const keyToReset = data.slice('admin_reset_key:'.length).trim().toUpperCase();
+    const res = await db.resetLicenseHwid(keyToReset);
+    if (res.success) {
+      await answerCallbackQuery(cb.id, 'Привязка к ПК сброшена!', false);
+      await sendMessage(chatId, `🔄 <b>Привязка сброшена!</b>\nКлюч <code>${escapeHtml(keyToReset)}</code> отвязан от устройства и снова готов к активации.`);
+    } else {
+      await answerCallbackQuery(cb.id, res.error || 'Ошибка сброса', true);
+      await sendMessage(chatId, `❌ Ошибка: ${escapeHtml(res.error)}`);
+    }
+    return;
+  }
+
+  if (data.startsWith('admin_revoke_key:')) {
+    const keyToRevoke = data.slice('admin_revoke_key:'.length).trim().toUpperCase();
+    const res = await db.revokeLicense(keyToRevoke);
+    if (res.success) {
+      await answerCallbackQuery(cb.id, 'Ключ аннулирован!', false);
+      await sendMessage(chatId, `🚫 <b>Ключ аннулирован!</b>\nКлюч <code>${escapeHtml(keyToRevoke)}</code> заблокирован администратором.`);
+    } else {
+      await answerCallbackQuery(cb.id, res.error || 'Ошибка блокировки', true);
+      await sendMessage(chatId, `❌ Ошибка: ${escapeHtml(res.error)}`);
+    }
     return;
   }
 
